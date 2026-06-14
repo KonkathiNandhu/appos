@@ -1,0 +1,29 @@
+{
+  "name": "shilparamam-api",
+  "version": "1.0.0",
+  "description": "Shilparamam REST API — self-hosted, independent of GEODEFINERS",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.0.1",
+    "body-parser": "^1.18.2",
+    "cors": "^2.8.5",
+    "crypto-js": "^4.1.1",
+    "express": "^4.16.3",
+    "jsonwebtoken": "^8.2.1",
+    "moment": "^2.24.0",
+    "mongoose": "^5.0.12",
+    "morgan": "^1.9.1",
+    "multer": "^1.3.0",
+    "node-schedule": "^1.3.2",
+    "nodemailer": "^5.1.1",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^1.17.5"
+  }
+}
