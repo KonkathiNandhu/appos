@@ -2,6 +2,9 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import User from '../../models/users/user.js';
+import UnitMaster from '../../models/unitmaster/unitmaster.js';
+import ActivityMaster from '../../models/activitymaster/activitymaster.js';
+import Group from '../../models/groups/group.js';
 import { checkApiKey } from '../../middleware/apikey.js';
 import { checkAuth } from '../../middleware/auth.js';
 
@@ -12,7 +15,7 @@ const router = express.Router();
 router.post('/login', checkApiKey, async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email, status: '1' }).populate('group_id').populate('unit_id');
+        const user = await User.findOne({ email, status: '1' }).lean();
         if (!user) return res.json({ messagecode: 110, message: 'Invalid credentials' });
 
         const match = await bcrypt.compare(password, user.password);
@@ -24,7 +27,13 @@ router.post('/login', checkApiKey, async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        const group = user.group_id || {};
+        // Manually populate unit, activity and group (Mixed type fields don't auto-populate)
+        const [unitData, activityData, groupData] = await Promise.all([
+            user.unit_id ? UnitMaster.findById(user.unit_id).lean().catch(() => null) : null,
+            user.activity_id ? ActivityMaster.findById(user.activity_id).lean().catch(() => null) : null,
+            user.group_id ? Group.findById(user.group_id).lean().catch(() => null) : null,
+        ]);
+
         res.json({
             messagecode: 100,
             message: 'Login successful',
@@ -37,11 +46,11 @@ router.post('/login', checkApiKey, async (req, res) => {
             time_zone: user.time_zone,
             date_format: user.date_format,
             time_format: user.time_format,
-            unit_id: user.unit_id,
-            activity_id: user.activity_id,
+            unit_id: unitData,
+            activity_id: activityData,
             is_super_admin: user.is_super_admin,
-            is_admin_group: group.is_admin || false,
-            group_id: user.group_id,
+            is_admin_group: groupData?.is_admin || false,
+            group_id: groupData,
         });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
