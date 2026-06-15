@@ -48,6 +48,12 @@ app.use('/uploads', express.static('uploads'));
 app.use('/documentuploads', express.static('documentuploads'));
 app.use('/appimages', express.static('appimages'));
 
+// Admin panel (Angular SPA) — serve at /admin
+app.use('/admin', express.static('admin'));
+app.get('/admin/*', (req, res) => {
+    res.sendFile('index.html', { root: 'admin' });
+});
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/users', usersRouter);
 app.use('/api/groups', groupsRouter);
