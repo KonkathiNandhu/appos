@@ -7,19 +7,37 @@ const router = express.Router();
 // GET /api/posadministration/getactivitiesbyunit/:unit_id
 router.get('/getactivitiesbyunit/:unit_id', checkApiKey, async (req, res) => {
     try {
-        const configs = await PosAdministration.find({
+        let configs = await PosAdministration.find({
             'unit_id._id': req.params.unit_id,
             status: '1'
         }).lean();
-        // Also try direct ObjectId match
+
         if (!configs.length) {
-            const configs2 = await PosAdministration.find({
+            configs = await PosAdministration.find({
                 unit_id: req.params.unit_id,
                 status: '1'
             }).lean();
-            return res.json({ messagecode: 100, message: 'POS config fetched', posadmin: configs2 });
         }
-        res.json({ messagecode: 100, message: 'POS config fetched', posadmin: configs });
+
+        // Transform to the format the POS app expects:
+        // { posdata: { activities: [{ _id, activity_name, billing_items: [...] }] } }
+        const activities = configs.map(cfg => {
+            const act = cfg.activity_id;
+            return {
+                _id: act?._id || act,
+                activity_name: act?.activity_name || '',
+                activity_code: act?.activity_code || '',
+                billing_items: (cfg.ticket_items || []).map(item => ({
+                    itemid: item.itemid,
+                    itemname: item.itemname,
+                    itemprice: item.itemprice,
+                    itemdescription: item.itemdescription || '',
+                    sort_order: item.sort_order
+                }))
+            };
+        });
+
+        res.json({ messagecode: 100, message: 'POS config fetched', posdata: { activities } });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
     }
