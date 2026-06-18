@@ -57,7 +57,7 @@ router.post('/getordersbetweendates/', checkApiKey, async (req, res) => {
         const query = {
             system_order_date_time: { $gte: from, $lte: to },
         };
-        if (unit_id) query['unit_id._id'] = unit_id;
+        if (unit_id) query.$or = [{ 'unit_id._id': unit_id }, { unit_id: unit_id }];
 
         const filteredorders = await PosTransactions.find(query).lean();
         res.json({ messagecode: 100, message: 'Orders fetched', filteredorders });
@@ -75,8 +75,11 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
         to.setHours(23, 59, 59, 999);
 
         const query = { system_order_date_time: { $gte: from, $lte: to } };
-        if (unit_id) query['unit_id._id'] = unit_id;
-        if (activity_id) query['activity_id._id'] = activity_id;
+        if (unit_id) query.$or = [{ 'unit_id._id': unit_id }, { unit_id: unit_id }];
+        if (activity_id) {
+            const actFilter = [{ 'activity_id._id': activity_id }, { activity_id: activity_id }];
+            query.$and = query.$and ? [...query.$and, { $or: actFilter }] : [{ $or: actFilter }];
+        }
 
         const orders = await PosTransactions.find(query).lean();
 
@@ -109,7 +112,7 @@ router.post('/getconsolidatedsalesreportbyuser', checkApiKey, async (req, res) =
         to.setHours(23, 59, 59, 999);
 
         const query = { system_order_date_time: { $gte: from, $lte: to } };
-        if (unit_id) query['unit_id._id'] = unit_id;
+        if (unit_id) query.$or = [{ 'unit_id._id': unit_id }, { unit_id: unit_id }];
 
         const orders = await PosTransactions.find(query).lean();
 
