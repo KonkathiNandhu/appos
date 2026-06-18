@@ -17,7 +17,7 @@ router.post('/', checkApiKey, async (req, res) => {
         data.system_order_date_time = new Date();
         const tx = new PosTransactions(data);
         await tx.save();
-        res.json({ messagecode: 100, message: 'Transaction saved', transaction: tx });
+        res.json({ messagecode: 100, message: 'Transaction saved', postransaction: tx });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
     }
