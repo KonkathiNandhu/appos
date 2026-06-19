@@ -23,4 +23,4 @@ const unitSchema = new mongoose.Schema({
     created_date: { type: String, default: () => new Date().toUTCString() },
 });
 
-export default mongoose.model('UnitMaster', unitSchema, 'units');
+export default mongoose.model('UnitMaster', unitSchema);
