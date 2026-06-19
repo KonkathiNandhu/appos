@@ -208,7 +208,7 @@ router.post('/getordersbetweendates/', checkApiKey, async (req, res) => {
 router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) => {
     try {
         const from_date = req.body.from_date || req.body.fromdate;
-        const to_date = req.body.to_date || req.body.todate;
+        const to_date   = req.body.to_date   || req.body.todate;
         const { unit_id, activity_id } = req.body;
         const page  = Math.max(1, parseInt(req.body.page)  || 1);
         const limit = Math.min(50, Math.max(1, parseInt(req.body.limit) || 10));
@@ -218,16 +218,30 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
         const to   = new Date(to_date);
         to.setHours(23, 59, 59, 999);
 
+        // Date range is the most selective filter — index on system_order_date_time handles this
         const matchStage = { system_order_date_time: { $gte: from, $lte: to } };
-        if (unit_id) matchStage.$or = idFilter('unit_id', unit_id);
+
+        // unit_id in DB is stored as embedded object {_id, unit_name} — match on ._id
+        if (unit_id) {
+            let oid;
+            try { oid = new mongoose.Types.ObjectId(unit_id); } catch (_) {}
+            matchStage.$or = oid
+                ? [{ 'unit_id._id': oid }, { unit_id: oid }, { 'unit_id._id': unit_id }]
+                : [{ 'unit_id._id': unit_id }, { unit_id: unit_id }];
+        }
         if (activity_id) {
-            const actFilter = idFilter('activity_id', activity_id);
-            matchStage.$and = [{ $or: actFilter }];
+            let aoid;
+            try { aoid = new mongoose.Types.ObjectId(activity_id); } catch (_) {}
+            const actClauses = aoid
+                ? [{ 'activity_id._id': aoid }, { activity_id: aoid }]
+                : [{ 'activity_id._id': activity_id }, { activity_id: activity_id }];
+            matchStage.$and = [{ $or: actClauses }];
         }
 
-        const toDouble = field => ({ $toDouble: { $ifNull: [field, 0] } });
+        const toDouble = f => ({ $toDouble: { $ifNull: [f, 0] } });
 
-        const [facetResult, actMap] = await Promise.all([
+        // Run aggregation (totals + items) and paginated find in parallel
+        const [aggResult, pagedOrders, totalCount] = await Promise.all([
             PosTransactions.aggregate([
                 { $match: matchStage },
                 { $facet: {
@@ -236,7 +250,7 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
                         total_amount: { $sum: toDouble('$total_amount') },
                         cash_total:   { $sum: { $cond: [{ $eq: ['$payment_mode', 'Cash'] }, toDouble('$total_amount'), 0] } },
                         upi_total:    { $sum: { $cond: [{ $eq: ['$payment_mode', 'UPI']  }, toDouble('$total_amount'), 0] } },
-                        count:        { $sum: 1 }
+                        count: { $sum: 1 }
                     }}],
                     item_summary: [
                         { $unwind: { path: '$choosen_items', preserveNullAndEmptyArrays: false } },
@@ -249,42 +263,35 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
                         }},
                         { $sort: { linetotal: -1 } }
                     ],
-                    orders: [
-                        { $sort: { system_order_date_time: -1 } },
-                        { $skip: skip },
-                        { $limit: limit }
-                    ],
-                    total_count: [{ $count: 'n' }],
                     activity_groups: [{ $group: {
                         _id:           { $toString: { $ifNull: ['$activity_id._id', '$activity_id'] } },
                         activity_name: { $first: '$activity_id.activity_name' },
                         total:         { $sum: toDouble('$total_amount') }
                     }}]
                 }}
-            ]),
-            buildActivityMap()
+            ]).allowDiskUse(true),
+            PosTransactions.find(matchStage).sort({ system_order_date_time: -1 }).skip(skip).limit(limit).lean(),
+            PosTransactions.countDocuments(matchStage)
         ]);
 
-        const facet      = facetResult[0] || {};
-        const totals     = (facet.totals || [])[0] || { total_amount: 0, cash_total: 0, upi_total: 0, count: 0 };
-        const totalCount = (facet.total_count || [])[0]?.n || 0;
+        const agg        = (aggResult[0] || {});
+        const totals     = (agg.totals || [])[0] || { total_amount: 0, cash_total: 0, upi_total: 0, count: 0 };
         const totalPages = Math.max(1, Math.ceil(totalCount / limit));
-        const orders     = facet.orders || [];
 
-        const grouped_by_activity = (facet.activity_groups || []).map(g => ({
+        const grouped_by_activity = (agg.activity_groups || []).map(g => ({
             activity_id:   g._id,
-            activity_name: g.activity_name || actMap[g._id] || 'Unknown',
+            activity_name: g.activity_name || 'Unknown',
             total:         g.total
         }));
 
         res.json({
             messagecode: 100, message: 'Orders fetched',
             totals,
-            item_summary:         facet.item_summary || [],
-            filteredorders:       orders,
+            item_summary:   agg.item_summary || [],
+            filteredorders: pagedOrders,
             totalCount, page, totalPages,
             grouped_by_activity,
-            orders
+            orders: pagedOrders
         });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });

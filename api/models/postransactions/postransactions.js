@@ -26,4 +26,10 @@ const posTransactionSchema = new mongoose.Schema({
     created_date: { type: String, default: () => new Date().toUTCString() },
 });
 
+// Indexes — critical for date-range report queries on large collections
+posTransactionSchema.index({ system_order_date_time: -1 });
+posTransactionSchema.index({ 'unit_id._id': 1, system_order_date_time: -1 });
+posTransactionSchema.index({ unit_id: 1, system_order_date_time: -1 });
+posTransactionSchema.index({ order_id: 1 }, { unique: false });
+
 export default mongoose.model('PosTransactions', posTransactionSchema);
