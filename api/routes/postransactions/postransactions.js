@@ -1,10 +1,86 @@
 import express from 'express';
 import mongoose from 'mongoose';
+import https from 'https';
+import CryptoJS from 'crypto-js';
 import PosTransactions from '../../models/postransactions/postransactions.js';
 import UnitMaster from '../../models/unitmaster/unitmaster.js';
 import ActivityMaster from '../../models/activitymaster/activitymaster.js';
 import { checkApiKey } from '../../middleware/apikey.js';
 import { v4 as uuidv4 } from 'uuid';
+
+// ── Paytm QR helpers ────────────────────────────────────────────────────────
+
+function paytmChecksum(bodyObj, merchantKey) {
+    const bodyStr = JSON.stringify(bodyObj);
+    return CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(bodyStr, merchantKey));
+}
+
+function httpsPost(hostname, path, payload) {
+    return new Promise((resolve, reject) => {
+        const data = JSON.stringify(payload);
+        const options = {
+            hostname,
+            path,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
+        };
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', chunk => { body += chunk; });
+            res.on('end', () => {
+                try { resolve(JSON.parse(body)); } catch { resolve(body); }
+            });
+        });
+        req.on('error', reject);
+        req.write(data);
+        req.end();
+    });
+}
+
+async function generatePaytmQR(cfg, orderId, amount) {
+    const body = {
+        mid: cfg.mid,
+        orderId: String(orderId),
+        amount: Number(amount).toFixed(2),
+        businessType: 'UPI_QR_CODE',
+        posId: '01'
+    };
+    const timestamp = Date.now().toString();
+    const signature = paytmChecksum(body, cfg.merchant_key);
+    const payload = {
+        head: { version: 'v1', timestamp, clientId: cfg.client_id || 'C11', signature },
+        body
+    };
+    const hostname = cfg.hostname || 'securegw.paytm.in';
+    const response = await httpsPost(hostname, '/paymentservices/qr/create', payload);
+
+    // Build UPI deep link from response or paytm_config fields
+    const upiVpa = cfg.upi_vpa || '';
+    const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
+    const mc = cfg.mc || '';
+    const amtStr = Number(amount).toFixed(2);
+    const qr_data = response?.body?.qrData ||
+        `upi://pay?pa=${upiVpa}&pn=${merchantName}&mc=${mc}&tr=${orderId}&am=${amtStr}&cu=INR`;
+
+    return {
+        qr_data,
+        response,
+        transaction_id: response?.body?.txnId || response?.body?.qrCodeId || ''
+    };
+}
+
+async function checkPaytmTxnStatus(cfg, orderId) {
+    const body = { mid: cfg.mid, orderId: String(orderId) };
+    const signature = paytmChecksum(body, cfg.merchant_key);
+    const payload = {
+        head: { version: 'v1', signature },
+        body
+    };
+    const hostname = cfg.hostname || 'securegw.paytm.in';
+    return await httpsPost(hostname, '/v3/order/status', payload);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 
 function resolveId(field) {
     return field?._id ? String(field._id) : String(field || '');
@@ -45,6 +121,22 @@ router.post('/', checkApiKey, async (req, res) => {
             data.order_id = 'SHILP' + ts;
         }
         data.system_order_date_time = new Date();
+
+        // Generate Paytm QR code for UPI payments
+        if (data.payment_mode === 'UPI' && data.unit_id) {
+            try {
+                const unitId = data.unit_id?._id || data.unit_id;
+                const unit = await UnitMaster.findById(unitId).lean();
+                const cfg = unit?.paytm_config;
+                if (cfg?.mid && cfg?.merchant_key) {
+                    data.qr_code_data = await generatePaytmQR(cfg, data.order_id, data.total_amount);
+                }
+            } catch (paytmErr) {
+                console.error('Paytm QR generation failed:', paytmErr.message);
+                // Transaction still saves — QR generation failure is non-fatal
+            }
+        }
+
         const tx = new PosTransactions(data);
         await tx.save();
         res.json({ messagecode: 100, message: 'Transaction saved', postransaction: tx });
@@ -59,7 +151,23 @@ router.post('/check-transaction-status', checkApiKey, async (req, res) => {
         const { order_id } = req.body;
         const tx = await PosTransactions.findOne({ order_id }).lean();
         if (!tx) return res.json({ messagecode: 110, message: 'Transaction not found' });
-        res.json({ messagecode: 100, message: 'Transaction found', transaction: tx });
+
+        // Check live Paytm payment status for UPI orders
+        let paytmStatus = null;
+        if (tx.payment_mode === 'UPI' && tx.unit_id) {
+            try {
+                const unitId = tx.unit_id?._id || tx.unit_id;
+                const unit = await UnitMaster.findById(unitId).lean();
+                const cfg = unit?.paytm_config;
+                if (cfg?.mid && cfg?.merchant_key) {
+                    paytmStatus = await checkPaytmTxnStatus(cfg, order_id);
+                }
+            } catch (e) {
+                console.error('Paytm status check failed:', e.message);
+            }
+        }
+
+        res.json({ messagecode: 100, message: 'Transaction found', transaction: tx, paytm_status: paytmStatus });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
     }
