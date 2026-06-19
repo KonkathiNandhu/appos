@@ -207,41 +207,84 @@ router.post('/getordersbetweendates/', checkApiKey, async (req, res) => {
 // POST /api/postransactions/getordersbetweendatesbyactivity
 router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) => {
     try {
-        // Accept both from_date/to_date (admin) and fromdate/todate (POS app)
         const from_date = req.body.from_date || req.body.fromdate;
         const to_date = req.body.to_date || req.body.todate;
         const { unit_id, activity_id } = req.body;
+        const page  = Math.max(1, parseInt(req.body.page)  || 1);
+        const limit = Math.min(50, Math.max(1, parseInt(req.body.limit) || 10));
+        const skip  = (page - 1) * limit;
+
         const from = new Date(from_date);
-        const to = new Date(to_date);
+        const to   = new Date(to_date);
         to.setHours(23, 59, 59, 999);
 
-        const query = { system_order_date_time: { $gte: from, $lte: to } };
-        if (unit_id) query.$or = idFilter('unit_id', unit_id);
+        const matchStage = { system_order_date_time: { $gte: from, $lte: to } };
+        if (unit_id) matchStage.$or = idFilter('unit_id', unit_id);
         if (activity_id) {
             const actFilter = idFilter('activity_id', activity_id);
-            query.$and = query.$and ? [...query.$and, { $or: actFilter }] : [{ $or: actFilter }];
+            matchStage.$and = [{ $or: actFilter }];
         }
 
-        const [orders, actMap] = await Promise.all([
-            PosTransactions.find(query).lean(),
+        const toDouble = field => ({ $toDouble: { $ifNull: [field, 0] } });
+
+        const [facetResult, actMap] = await Promise.all([
+            PosTransactions.aggregate([
+                { $match: matchStage },
+                { $facet: {
+                    totals: [{ $group: {
+                        _id: null,
+                        total_amount: { $sum: toDouble('$total_amount') },
+                        cash_total:   { $sum: { $cond: [{ $eq: ['$payment_mode', 'Cash'] }, toDouble('$total_amount'), 0] } },
+                        upi_total:    { $sum: { $cond: [{ $eq: ['$payment_mode', 'UPI']  }, toDouble('$total_amount'), 0] } },
+                        count:        { $sum: 1 }
+                    }}],
+                    item_summary: [
+                        { $unwind: { path: '$choosen_items', preserveNullAndEmptyArrays: false } },
+                        { $group: {
+                            _id:       '$choosen_items.itemname',
+                            itemname:  { $first: '$choosen_items.itemname' },
+                            itemid:    { $first: '$choosen_items.itemid' },
+                            quantity:  { $sum: toDouble('$choosen_items.quantity') },
+                            linetotal: { $sum: toDouble('$choosen_items.linetotal') }
+                        }},
+                        { $sort: { linetotal: -1 } }
+                    ],
+                    orders: [
+                        { $sort: { system_order_date_time: -1 } },
+                        { $skip: skip },
+                        { $limit: limit }
+                    ],
+                    total_count: [{ $count: 'n' }],
+                    activity_groups: [{ $group: {
+                        _id:           { $toString: { $ifNull: ['$activity_id._id', '$activity_id'] } },
+                        activity_name: { $first: '$activity_id.activity_name' },
+                        total:         { $sum: toDouble('$total_amount') }
+                    }}]
+                }}
+            ]),
             buildActivityMap()
         ]);
 
-        // Group by activity
-        const grouped = {};
-        orders.forEach(o => {
-            const aid = resolveId(o.activity_id);
-            const aname = o.activity_id?.activity_name || actMap[aid] || aid || 'Unknown';
-            if (!grouped[aid]) grouped[aid] = { activity_id: aid, activity_name: aname, orders: [], total: 0 };
-            grouped[aid].orders.push(o);
-            grouped[aid].total += Number(o.total_amount || 0);
-        });
+        const facet      = facetResult[0] || {};
+        const totals     = (facet.totals || [])[0] || { total_amount: 0, cash_total: 0, upi_total: 0, count: 0 };
+        const totalCount = (facet.total_count || [])[0]?.n || 0;
+        const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+        const orders     = facet.orders || [];
+
+        const grouped_by_activity = (facet.activity_groups || []).map(g => ({
+            activity_id:   g._id,
+            activity_name: g.activity_name || actMap[g._id] || 'Unknown',
+            total:         g.total
+        }));
 
         res.json({
             messagecode: 100, message: 'Orders fetched',
-            filteredorders: orders,  // POS app reads filteredorders
-            orders,
-            grouped_by_activity: Object.values(grouped)
+            totals,
+            item_summary:         facet.item_summary || [],
+            filteredorders:       orders,
+            totalCount, page, totalPages,
+            grouped_by_activity,
+            orders
         });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
