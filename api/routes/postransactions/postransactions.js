@@ -1,7 +1,28 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import PosTransactions from '../../models/postransactions/postransactions.js';
+import UnitMaster from '../../models/unitmaster/unitmaster.js';
+import ActivityMaster from '../../models/activitymaster/activitymaster.js';
 import { checkApiKey } from '../../middleware/apikey.js';
 import { v4 as uuidv4 } from 'uuid';
+
+function resolveId(field) {
+    return field?._id ? String(field._id) : String(field || '');
+}
+
+async function buildUnitMap() {
+    const units = await UnitMaster.find({}).lean();
+    const map = {};
+    units.forEach(u => { map[String(u._id)] = u.unit_name || String(u._id); });
+    return map;
+}
+
+async function buildActivityMap() {
+    const acts = await ActivityMaster.find({}).lean();
+    const map = {};
+    acts.forEach(a => { map[String(a._id)] = a.activity_name || String(a._id); });
+    return map;
+}
 
 const router = express.Router();
 
@@ -81,13 +102,16 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
             query.$and = query.$and ? [...query.$and, { $or: actFilter }] : [{ $or: actFilter }];
         }
 
-        const orders = await PosTransactions.find(query).lean();
+        const [orders, actMap] = await Promise.all([
+            PosTransactions.find(query).lean(),
+            buildActivityMap()
+        ]);
 
         // Group by activity
         const grouped = {};
         orders.forEach(o => {
-            const aid = o.activity_id?._id || o.activity_id || 'unknown';
-            const aname = o.activity_id?.activity_name || 'Unknown';
+            const aid = resolveId(o.activity_id);
+            const aname = o.activity_id?.activity_name || actMap[aid] || aid || 'Unknown';
             if (!grouped[aid]) grouped[aid] = { activity_id: aid, activity_name: aname, orders: [], total: 0 };
             grouped[aid].orders.push(o);
             grouped[aid].total += Number(o.total_amount || 0);
@@ -143,14 +167,15 @@ router.post('/getunitwiseconsolidatedsalesreport', checkApiKey, async (req, res)
         const to = new Date(to_date);
         to.setHours(23, 59, 59, 999);
 
-        const orders = await PosTransactions.find({
-            system_order_date_time: { $gte: from, $lte: to }
-        }).lean();
+        const [orders, unitMap] = await Promise.all([
+            PosTransactions.find({ system_order_date_time: { $gte: from, $lte: to } }).lean(),
+            buildUnitMap()
+        ]);
 
         const grouped = {};
         orders.forEach(o => {
-            const uid = o.unit_id?._id || o.unit_id || 'unknown';
-            const uname = o.unit_id?.unit_name || 'Unknown';
+            const uid = resolveId(o.unit_id);
+            const uname = o.unit_id?.unit_name || unitMap[uid] || uid || 'Unknown';
             if (!grouped[uid]) grouped[uid] = { unit_id: uid, unit_name: uname, orders: [], total: 0 };
             grouped[uid].orders.push(o);
             grouped[uid].total += Number(o.total_amount || 0);
