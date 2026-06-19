@@ -90,7 +90,10 @@ router.post('/getordersbetweendates/', checkApiKey, async (req, res) => {
 // POST /api/postransactions/getordersbetweendatesbyactivity
 router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) => {
     try {
-        const { from_date, to_date, unit_id, activity_id } = req.body;
+        // Accept both from_date/to_date (admin) and fromdate/todate (POS app)
+        const from_date = req.body.from_date || req.body.fromdate;
+        const to_date = req.body.to_date || req.body.todate;
+        const { unit_id, activity_id } = req.body;
         const from = new Date(from_date);
         const to = new Date(to_date);
         to.setHours(23, 59, 59, 999);
@@ -119,6 +122,7 @@ router.post('/getordersbetweendatesbyactivity', checkApiKey, async (req, res) =>
 
         res.json({
             messagecode: 100, message: 'Orders fetched',
+            filteredorders: orders,  // POS app reads filteredorders
             orders,
             grouped_by_activity: Object.values(grouped)
         });
