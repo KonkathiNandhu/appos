@@ -34,21 +34,20 @@ router.get('/getactivitiesbyunit/:unit_id', checkApiKey, async (req, res) => {
         let activities = [];
 
         if (config.activities && Array.isArray(config.activities)) {
-            // Real dump format: one doc per unit, nested activities[] with billing_items
-            activities = config.activities
-                .filter(act => Array.isArray(act.billing_items) && act.billing_items.length > 0)
-                .map(act => ({
-                    _id: act._id,
-                    activity_name: act.activity_name || '',
-                    activity_code: act.activity_code || '',
-                    billing_items: act.billing_items.map(item => ({
-                        itemid: item._id || item.itemid,
-                        itemname: item.itemname,
-                        itemprice: item.itemprice,
-                        itemdescription: item.itemdescription || '',
-                        sort_order: item.sort_order || 0
-                    }))
-                }));
+            // Real dump format: one doc per unit, nested activities[] with selected flag + billing_items
+            activities = config.activities.map(act => ({
+                _id: act._id,
+                activity_name: act.activity_name || '',
+                activity_code: act.activity_code || '',
+                selected: act.selected === true,
+                billing_items: (act.billing_items || []).map(item => ({
+                    itemid: item._id || item.itemid,
+                    itemname: item.itemname,
+                    itemprice: item.itemprice,
+                    itemdescription: item.itemdescription || '',
+                    sort_order: item.sort_order || 0
+                }))
+            }));
         } else if (config.ticket_items) {
             // Old reconstructed format: individual docs with ticket_items
             const act = config.activity_id;

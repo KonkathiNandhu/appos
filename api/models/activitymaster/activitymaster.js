@@ -9,4 +9,4 @@ const activitySchema = new mongoose.Schema({
     created_date: { type: String, default: () => new Date().toUTCString() },
 });
 
-export default mongoose.model('ActivityMaster', activitySchema);
+export default mongoose.model('ActivityMaster', activitySchema, 'activities');
