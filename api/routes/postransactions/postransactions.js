@@ -188,17 +188,38 @@ router.post('/updateprintflag', checkApiKey, async (req, res) => {
 router.post('/getordersbetweendates/', checkApiKey, async (req, res) => {
     try {
         const { fromdate, todate, unit_id } = req.body;
+        const page  = Math.max(1, parseInt(req.body.page)  || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.body.limit) || 50));
+        const skip  = (page - 1) * limit;
+
         const from = new Date(fromdate);
-        const to = new Date(todate);
+        const to   = new Date(todate);
         to.setHours(23, 59, 59, 999);
 
-        const query = {
-            system_order_date_time: { $gte: from, $lte: to },
-        };
+        const query = { system_order_date_time: { $gte: from, $lte: to } };
         if (unit_id) query.$or = idFilter('unit_id', unit_id);
 
-        const filteredorders = await PosTransactions.find(query).lean();
-        res.json({ messagecode: 100, message: 'Orders fetched', filteredorders });
+        const toDouble = f => ({ $toDouble: { $ifNull: [f, 0] } });
+
+        const [aggResult, filteredorders, totalCount] = await Promise.all([
+            PosTransactions.aggregate([
+                { $match: query },
+                { $group: {
+                    _id: null,
+                    total_amount: { $sum: toDouble('$total_amount') },
+                    cash_total:   { $sum: { $cond: [{ $eq: ['$payment_mode', 'Cash'] }, toDouble('$total_amount'), 0] } },
+                    upi_total:    { $sum: { $cond: [{ $eq: ['$payment_mode', 'UPI']  }, toDouble('$total_amount'), 0] } },
+                    count: { $sum: 1 }
+                }}
+            ]).allowDiskUse(true),
+            PosTransactions.find(query).sort({ system_order_date_time: -1 }).skip(skip).limit(limit).lean(),
+            PosTransactions.countDocuments(query)
+        ]);
+
+        const totals     = aggResult[0] || { total_amount: 0, cash_total: 0, upi_total: 0, count: 0 };
+        const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+        res.json({ messagecode: 100, message: 'Orders fetched', filteredorders, totals, totalCount, page, totalPages });
     } catch (err) {
         res.status(500).json({ messagecode: 110, message: err.message });
     }
