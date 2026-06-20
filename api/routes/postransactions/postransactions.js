@@ -38,34 +38,44 @@ function httpsPost(hostname, path, payload) {
 }
 
 async function generatePaytmQR(cfg, orderId, amount) {
+    const amtStr = Number(amount).toFixed(2);
     const body = {
         mid: cfg.mid,
         orderId: String(orderId),
-        amount: Number(amount).toFixed(2),
+        amount: amtStr,
         businessType: 'UPI_QR_CODE',
-        posId: '01'
+        posId: cfg.pos_id || '01'
     };
-    const timestamp = Date.now().toString();
+    if (cfg.merchant_name) body.merchantName = cfg.merchant_name;
+
     const signature = paytmChecksum(body, cfg.merchant_key);
     const payload = {
-        head: { version: 'v1', timestamp, clientId: cfg.client_id || 'C11', signature },
+        head: { version: 'v1', clientId: cfg.client_id || 'C11', signature },
         body
     };
-    const hostname = cfg.hostname || 'securegw.paytm.in';
-    const response = await httpsPost(hostname, '/paymentservices/qr/create', payload);
+    // Staging: securestage.paytmpayments.com
+    // Production: securegw.paytmpayments.com
+    const hostname = cfg.hostname || 'securegw.paytmpayments.com';
 
-    const amtStr = Number(amount).toFixed(2);
-    // Use Paytm's qrData (UPI URI) if returned; fall back to upi_vpa if configured
-    const paytmQrData = response?.body?.qrData || null;
-    const upiVpa = cfg.upi_vpa || null;
-    const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
-    const qr_data = paytmQrData ||
-        (upiVpa ? `upi://pay?pa=${upiVpa}&pn=${merchantName}&tr=${orderId}&am=${amtStr}&cu=INR` : null);
+    let response;
+    try {
+        response = await httpsPost(hostname, '/paymentservices/qr/create', payload);
+    } catch (err) {
+        console.error('Paytm QR API call failed:', err.message);
+        return null;
+    }
+
+    const resultStatus = response?.body?.resultInfo?.resultStatus;
+    if (resultStatus !== 'SUCCESS') {
+        console.error('Paytm QR error:', JSON.stringify(response?.body?.resultInfo || response));
+        return null;
+    }
 
     return {
-        qr_data,
+        qr_data: response.body.qrData || null,
+        image: response.body.image || null,    // base64 PNG from Paytm
         response,
-        transaction_id: response?.body?.txnId || response?.body?.qrCodeId || ''
+        transaction_id: response.body.qrCodeId || ''
     };
 }
 
@@ -76,7 +86,7 @@ async function checkPaytmTxnStatus(cfg, orderId) {
         head: { version: 'v1', signature },
         body
     };
-    const hostname = cfg.hostname || 'securegw.paytm.in';
+    const hostname = cfg.hostname || 'securegw.paytmpayments.com';
     return await httpsPost(hostname, '/v3/order/status', payload);
 }
 
