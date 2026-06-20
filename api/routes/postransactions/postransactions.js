@@ -80,13 +80,32 @@ async function generatePaytmQR(cfg, orderId, amount) {
     return await generateUpiVpaQR(cfg, orderId, amtStr);
 }
 
+function httpsGet(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+            if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+                resolve(httpsGet(res.headers.location));
+                return;
+            }
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+        }).on('error', reject);
+    });
+}
+
 async function generateUpiVpaQR(cfg, orderId, amtStr) {
     if (!cfg.upi_vpa) return null;
     const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
     const upiString = `upi://pay?pa=${cfg.upi_vpa}&pn=${merchantName}&tr=${orderId}&am=${amtStr}&cu=INR`;
-    // Return the Google Chart URL — browser fetches the QR image directly, no server-side HTTP call needed
-    const qrImageUrl = `https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(upiString)}&choe=UTF-8`;
-    return { qr_data: upiString, image: null, qr_image_url: qrImageUrl, response: null, transaction_id: '' };
+    try {
+        const imgBuf = await httpsGet(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiString)}`);
+        const image = imgBuf.toString('base64');
+        return { qr_data: upiString, image, response: { body: { image } }, transaction_id: '' };
+    } catch (err) {
+        console.error('UPI VPA QR generation failed:', err.message);
+        return null;
+    }
 }
 
 async function checkPaytmTxnStatus(cfg, orderId) {
