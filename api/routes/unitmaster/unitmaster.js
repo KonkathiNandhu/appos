@@ -17,7 +17,8 @@ router.post('/', checkApiKey, async (req, res) => {
     try {
         const data = req.body;
         if (data._id) {
-            const unit = await UnitMaster.findByIdAndUpdate(data._id, data, { new: true });
+            const { _id, paytm_config, ...safeFields } = data;
+            const unit = await UnitMaster.findByIdAndUpdate(_id, { $set: safeFields }, { new: true });
             return res.json({ messagecode: 100, message: 'Unit updated', unit });
         }
         const unit = new UnitMaster(data);
