@@ -2,7 +2,6 @@ import express from 'express';
 import mongoose from 'mongoose';
 import https from 'https';
 import CryptoJS from 'crypto-js';
-import QRCode from 'qrcode';
 import PosTransactions from '../../models/postransactions/postransactions.js';
 import UnitMaster from '../../models/unitmaster/unitmaster.js';
 import ActivityMaster from '../../models/activitymaster/activitymaster.js';
@@ -85,14 +84,19 @@ async function generateUpiVpaQR(cfg, orderId, amtStr) {
     if (!cfg.upi_vpa) return null;
     const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
     const upiString = `upi://pay?pa=${cfg.upi_vpa}&pn=${merchantName}&tr=${orderId}&am=${amtStr}&cu=INR`;
+    // Use Google Chart API — no extra package, uses the https module already imported
+    const qrPath = `/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(upiString)}&choe=UTF-8`;
     try {
-        const dataUrl = await QRCode.toDataURL(upiString, { width: 300, margin: 2 });
-        return {
-            qr_data: upiString,
-            image: dataUrl.replace('data:image/png;base64,', ''),
-            response: null,
-            transaction_id: ''
-        };
+        const imageBase64 = await new Promise((resolve, reject) => {
+            const req = https.request({ hostname: 'chart.googleapis.com', path: qrPath, method: 'GET' }, (res) => {
+                const chunks = [];
+                res.on('data', c => chunks.push(c));
+                res.on('end', () => resolve(Buffer.concat(chunks).toString('base64')));
+            });
+            req.on('error', reject);
+            req.end();
+        });
+        return { qr_data: upiString, image: imageBase64, response: null, transaction_id: '' };
     } catch (err) {
         console.error('UPI VPA QR generation failed:', err.message);
         return null;
