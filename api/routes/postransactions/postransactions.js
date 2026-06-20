@@ -54,13 +54,13 @@ async function generatePaytmQR(cfg, orderId, amount) {
     const hostname = cfg.hostname || 'securegw.paytm.in';
     const response = await httpsPost(hostname, '/paymentservices/qr/create', payload);
 
-    // Build UPI deep link from response or paytm_config fields
-    const upiVpa = cfg.upi_vpa || '';
-    const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
-    const mc = cfg.mc || '';
     const amtStr = Number(amount).toFixed(2);
-    const qr_data = response?.body?.qrData ||
-        `upi://pay?pa=${upiVpa}&pn=${merchantName}&mc=${mc}&tr=${orderId}&am=${amtStr}&cu=INR`;
+    // Use Paytm's qrData (UPI URI) if returned; fall back to upi_vpa if configured
+    const paytmQrData = response?.body?.qrData || null;
+    const upiVpa = cfg.upi_vpa || null;
+    const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
+    const qr_data = paytmQrData ||
+        (upiVpa ? `upi://pay?pa=${upiVpa}&pn=${merchantName}&tr=${orderId}&am=${amtStr}&cu=INR` : null);
 
     return {
         qr_data,
