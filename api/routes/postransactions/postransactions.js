@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import https from 'https';
 import CryptoJS from 'crypto-js';
+import QRCode from 'qrcode';
 import PosTransactions from '../../models/postransactions/postransactions.js';
 import UnitMaster from '../../models/unitmaster/unitmaster.js';
 import ActivityMaster from '../../models/activitymaster/activitymaster.js';
@@ -66,17 +67,36 @@ async function generatePaytmQR(cfg, orderId, amount) {
     }
 
     const resultStatus = response?.body?.resultInfo?.resultStatus;
-    if (resultStatus !== 'SUCCESS') {
-        console.error('Paytm QR error:', JSON.stringify(response?.body?.resultInfo || response));
-        return null;
+    if (resultStatus === 'SUCCESS') {
+        return {
+            qr_data: response.body.qrData || null,
+            image: response.body.image || null,    // base64 PNG from Paytm
+            response,
+            transaction_id: response.body.qrCodeId || ''
+        };
     }
 
-    return {
-        qr_data: response.body.qrData || null,
-        image: response.body.image || null,    // base64 PNG from Paytm
-        response,
-        transaction_id: response.body.qrCodeId || ''
-    };
+    // Paytm API failed — log and fall back to UPI VPA if configured
+    console.error('Paytm QR error:', JSON.stringify(response?.body?.resultInfo || response));
+    return await generateUpiVpaQR(cfg, orderId, amtStr);
+}
+
+async function generateUpiVpaQR(cfg, orderId, amtStr) {
+    if (!cfg.upi_vpa) return null;
+    const merchantName = encodeURIComponent(cfg.merchant_name || 'Shilparamam');
+    const upiString = `upi://pay?pa=${cfg.upi_vpa}&pn=${merchantName}&tr=${orderId}&am=${amtStr}&cu=INR`;
+    try {
+        const dataUrl = await QRCode.toDataURL(upiString, { width: 300, margin: 2 });
+        return {
+            qr_data: upiString,
+            image: dataUrl.replace('data:image/png;base64,', ''),
+            response: null,
+            transaction_id: ''
+        };
+    } catch (err) {
+        console.error('UPI VPA QR generation failed:', err.message);
+        return null;
+    }
 }
 
 async function checkPaytmTxnStatus(cfg, orderId) {
