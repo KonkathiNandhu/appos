@@ -47,7 +47,7 @@ router.post('/login', checkApiKey, async (req, res) => {
             date_format: user.date_format,
             time_format: user.time_format,
             unit_id: unitData,
-            activity_id: activityData,
+            activity_id: user.activity_id,
             is_super_admin: user.is_super_admin,
             is_admin_group: groupData?.is_admin || false,
             group_id: groupData,
