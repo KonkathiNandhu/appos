@@ -1,5 +1,4 @@
 import express from 'express';
-import https from 'https';
 import morgan from 'morgan';
 import bodyParser from 'body-parser';
 import mongoose from 'mongoose';
@@ -74,14 +73,6 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Temporary: reveal server outbound IP
-app.get('/api/serverip', (req, res) => {
-    https.get('https://api.ipify.org?format=json', (r) => {
-        let d = '';
-        r.on('data', c => d += c);
-        r.on('end', () => res.json(JSON.parse(d)));
-    }).on('error', e => res.json({ error: e.message }));
-});
 
 // 404 handler
 app.use((req, res) => {
